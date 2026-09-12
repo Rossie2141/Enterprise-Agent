@@ -13,7 +13,7 @@ def get_llm():
         raise ValueError("HF_TOKEN is not set in the .env file.")
 
     llm = HuggingFaceEndpoint(
-        repo_id="Qwen/Qwen3.8-2.4T-A95B",
+        repo_id="Qwen/Qwen2.5-72B-Instruct",
         huggingfacehub_api_token=hf_token,
         temperature=0.1,
         max_new_tokens=512,

@@ -1,0 +1,11 @@
+ticket_id,customer_id,priority,status,subject,description,created_at
+TCK-1001,CUST-001,high,open,Payment failure,Customer unable to complete payment,2026-09-01
+TCK-1002,CUST-002,medium,open,Login issue,Customer cannot log into the dashboard,2026-09-02
+TCK-1003,CUST-003,high,pending,API outage,Production API requests are failing intermittently,2026-09-02
+TCK-1004,CUST-004,low,resolved,Password reset,Customer requested password reset assistance,2026-09-03
+TCK-1005,CUST-005,high,resolved,Data loss,Customer reports missing records from dashboard,2026-09-03
+TCK-1006,CUST-006,medium,resolved,Billing question,Customer asked about unexpected invoice charge,2026-09-04
+TCK-1007,CUST-007,high,open,Service unavailable,Customer cannot access the production service,2026-09-05
+TCK-1008,CUST-008,low,pending,Feature request,Customer requested dark mode support,2026-09-05
+TCK-1009,CUST-009,medium,open,Slow performance,Dashboard pages are loading slowly,2026-09-06
+TCK-1010,CUST-010,high,resolved,Security alert,Customer reported suspicious account activity,2026-09-06
