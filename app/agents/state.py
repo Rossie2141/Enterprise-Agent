@@ -1,4 +1,4 @@
-from typing import TypedDict, Annotated, Sequence
+from typing import TypedDict, Annotated, Sequence, Literal
 
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
@@ -14,3 +14,5 @@ class AgentState(TypedDict, total=False):
     messages: Annotated[Sequence[BaseMessage], add_messages]
 
     final_answer: str
+
+    route: Literal["ticket", "knowledge", "mixed", "general"]

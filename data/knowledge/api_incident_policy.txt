@@ -1,0 +1,11 @@
+API Incident Response Policy
+
+Production API incidents should be treated as high priority when they affect multiple customers or cause sustained request failures.
+
+Support should first verify the affected API endpoint and determine whether the issue is ongoing.
+
+If the incident is confirmed, the support team should notify the engineering team with the affected endpoint, approximate start time, customer impact, and relevant ticket IDs.
+
+Customers should receive status updates when an incident materially affects production service.
+
+Resolved incidents should include a brief summary of the cause and the corrective action taken.

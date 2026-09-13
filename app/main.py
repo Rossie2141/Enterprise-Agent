@@ -1,7 +1,11 @@
 from langchain_core.messages import HumanMessage
 from langgraph.types import Command
+import time
 
 from app.agents.graph import agent
+from app.guardrails.input_guardrails import validate_input
+from app.guardrails.output_guardrails import validate_output
+from app.utils.logger import logger
 
 
 def main():
@@ -11,12 +15,34 @@ def main():
     while True:
         user_request = input("\nYou: ").strip()
 
+        # ----------------------------------------------------
+        # Exit
+        # ----------------------------------------------------
+
         if user_request.lower() in {"exit", "quit"}:
             print("Goodbye!")
             break
 
+        # Ignore empty input
         if not user_request:
             continue
+
+        logger.info("Request received: %s", user_request)
+
+        # ----------------------------------------------------
+        # Input guardrail
+        # ----------------------------------------------------
+
+        allowed, reason = validate_input(user_request)
+
+        if not allowed:
+            logger.warning("Input blocked: %s", reason)
+            print(f"\n⚠️ Request blocked: {reason}")
+            continue
+
+        # ----------------------------------------------------
+        # Agent configuration
+        # ----------------------------------------------------
 
         config = {
             "configurable": {
@@ -24,45 +50,111 @@ def main():
             }
         }
 
-        result = agent.invoke(
-            {
-                "user_request": user_request,
-                "messages": [
-                    HumanMessage(content=user_request)
-                ],
-            },
-            config=config,
-        )
+        try:
+            # ------------------------------------------------
+            # Run agent
+            # ------------------------------------------------
 
-        while "__interrupt__" in result:
-            interrupt_data = result["__interrupt__"][0].value
+            start_time = time.perf_counter()
+            logger.info("Starting agent execution")
 
-            print("\n⚠️  APPROVAL REQUIRED")
-            print(interrupt_data["message"])
+            result = agent.invoke(
+                {
+                    "user_request": user_request,
+                    "messages": [
+                        HumanMessage(
+                            content=user_request
+                        )
+                    ],
+                },
+                config=config,
+            )
 
-            print(f"Ticket ID: {interrupt_data['ticket_id']}")
+            logger.info("Agent execution completed")
+            latency = time.perf_counter() - start_time
 
-            if interrupt_data["new_status"]:
-                print(f"New status: {interrupt_data['new_status']}")
+            logger.info(
+                "Agent request completed in %.2f seconds",
+                latency,
+            )
 
-            if interrupt_data["new_priority"]:
-                print(f"New priority: {interrupt_data['new_priority']}")
+            # ------------------------------------------------
+            # Human-in-the-Loop
+            # ------------------------------------------------
 
-            approval = input("\nApprove this action? (yes/no): ").strip().lower()
+            while "__interrupt__" in result:
 
-            if approval in {"yes", "y"}:
-                result = agent.invoke(
-                    Command(resume=True),
-                    config=config,
+                interrupt_data = result[
+                    "__interrupt__"
+                ][0].value
+
+                print("\n⚠️ APPROVAL REQUIRED")
+                print(interrupt_data["message"])
+
+                print(
+                    f"Ticket ID: "
+                    f"{interrupt_data['ticket_id']}"
                 )
+
+                if interrupt_data.get("new_status"):
+                    print(
+                        f"New status: "
+                        f"{interrupt_data['new_status']}"
+                    )
+
+                if interrupt_data.get("new_priority"):
+                    print(
+                        f"New priority: "
+                        f"{interrupt_data['new_priority']}"
+                    )
+
+                approval = input(
+                    "\nApprove this action? (yes/no): "
+                ).strip().lower()
+
+                if approval in {"yes", "y"}:
+                    logger.info("HITL action approved")
+                    result = agent.invoke(
+                        Command(resume=True),
+                        config=config,
+                    )
+                else:
+                    logger.info("HITL action rejected")
+                    result = agent.invoke(
+                        Command(resume=False),
+                        config=config,
+                    )
+
+            # ------------------------------------------------
+            # Display final response
+            # ------------------------------------------------
+
+            final_response = result["messages"][-1].content
+
+            allowed, reason = validate_output(final_response)
+
+            if allowed:
+                logger.info("Output validation passed")
             else:
-                result = agent.invoke(
-                    Command(resume=False),
-                    config=config,
+                logger.warning(
+                    "Output validation blocked response: %s",
+                    reason,
                 )
 
-        print("\nAgent:")
-        print(result["messages"][-1].content)
+            print("\nAgent:")
+
+            if allowed:
+                print(final_response)
+            else:
+                print(f"⚠️ Response blocked: {reason}")
+
+        except Exception as e:
+            logger.exception("Unexpected agent error")
+
+            print(
+                "\n❌ An unexpected error occurred. "
+                "Please try again."
+            )
 
 
 if __name__ == "__main__":

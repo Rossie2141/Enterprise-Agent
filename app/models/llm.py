@@ -1,22 +1,30 @@
-from dotenv import load_dotenv
-from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 import os
+
+from dotenv import load_dotenv
+from langchain_groq import ChatGroq
+
 
 load_dotenv()
 
 
 def get_llm():
+    """
+    Create and return the Groq chat model.
+    """
 
-    hf_token = os.getenv("HF_TOKEN")
+    groq_api_key = os.getenv("GROQ_API_KEY")
 
-    if not hf_token:
-        raise ValueError("HF_TOKEN is not set in the .env file.")
+    if not groq_api_key:
+        raise ValueError(
+            "GROQ_API_KEY is not set in the .env file."
+        )
 
-    llm = HuggingFaceEndpoint(
-        repo_id="Qwen/Qwen2.5-72B-Instruct",
-        huggingfacehub_api_token=hf_token,
+    llm = ChatGroq(
+        model="openai/gpt-oss-120b",
         temperature=0.1,
-        max_new_tokens=512,
+        max_tokens=512,
+        api_key=groq_api_key,
+        max_retries=2,
     )
 
-    return ChatHuggingFace(llm=llm)
+    return llm
