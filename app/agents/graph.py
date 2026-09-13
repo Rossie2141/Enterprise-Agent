@@ -16,6 +16,12 @@ from app.tools.ticket_tools import (
 
 from app.tools.knowledge_tools import search_knowledge
 
+from app.mcp.langchain_tools import (
+    mcp_search_tickets,
+    mcp_get_ticket,
+    mcp_update_ticket,
+)
+
 
 llm = get_llm()
 
@@ -31,9 +37,9 @@ all_tools = [
 
 # Tool groups
 ticket_tools = [
-    search_tickets,
-    get_ticket,
-    update_ticket,
+    mcp_search_tickets,
+    mcp_get_ticket,
+    mcp_update_ticket,
 ]
 
 knowledge_tools = [

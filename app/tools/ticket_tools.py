@@ -1,3 +1,4 @@
+
 from pathlib import Path
 
 from langchain_core.tools import tool
@@ -64,8 +65,8 @@ def search_tickets(
         with get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(query, params)
-
                 rows = cur.fetchall()
+
                 columns = [
                     description.name
                     for description in cur.description
@@ -135,23 +136,16 @@ def get_ticket(ticket_id: str) -> dict:
         )
 
 
-@tool
-def update_ticket(
+def _update_ticket_db(
     ticket_id: str,
     status: str = "",
     priority: str = "",
 ) -> dict:
-    """Update the status and/or priority of a support ticket.
+    """Perform the actual ticket database update.
 
-    Args:
-        ticket_id: The unique ticket ID, such as TCK-1005.
-        status: New status. Allowed values: open, pending, resolved.
-        priority: New priority. Allowed values: low, medium, high.
-
-    Returns:
-        The updated ticket dictionary, or an error message.
+    This function intentionally contains no LangGraph interrupt.
+    It can therefore be called from both LangGraph and MCP.
     """
-
     valid_statuses = {
         "open",
         "pending",
@@ -167,10 +161,6 @@ def update_ticket(
     requested_status = status.strip().lower()
     requested_priority = priority.strip().lower()
     requested_ticket_id = ticket_id.strip()
-
-    # --------------------------------------------------------
-    # Validate input
-    # --------------------------------------------------------
 
     if (
         requested_status
@@ -194,35 +184,53 @@ def update_ticket(
             )
         }
 
+    if not requested_status and not requested_priority:
+        return {
+            "error": "No update fields were provided."
+        }
+
     try:
-        # ----------------------------------------------------
-        # Verify ticket exists BEFORE asking for approval
-        # ----------------------------------------------------
+        update_fields = []
+        params = []
+
+        if requested_status:
+            update_fields.append("status = %s")
+            params.append(requested_status)
+
+        if requested_priority:
+            update_fields.append("priority = %s")
+            params.append(requested_priority)
+
+        params.append(requested_ticket_id)
+
+        query = f"""
+            UPDATE tickets
+            SET {", ".join(update_fields)}
+            WHERE LOWER(ticket_id) = LOWER(%s)
+            RETURNING
+                ticket_id,
+                customer_id,
+                priority,
+                status,
+                subject,
+                description,
+                created_at
+        """
 
         with get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """
-                    SELECT
-                        ticket_id,
-                        customer_id,
-                        priority,
-                        status,
-                        subject,
-                        description,
-                        created_at
-                    FROM tickets
-                    WHERE LOWER(ticket_id) = LOWER(%s)
-                    """,
-                    (requested_ticket_id,),
+                    query,
+                    params,
                 )
 
-                existing_ticket = cur.fetchone()
+                updated_row = cur.fetchone()
 
-                if not existing_ticket:
+                if not updated_row:
                     return {
                         "error": (
-                            f"Ticket {ticket_id} not found."
+                            f"Ticket {ticket_id} "
+                            "could not be updated."
                         )
                     }
 
@@ -231,13 +239,97 @@ def update_ticket(
                     for description in cur.description
                 ]
 
-                existing_ticket = dict(
-                    zip(columns, existing_ticket)
+                return dict(
+                    zip(columns, updated_row)
                 )
 
-        # ----------------------------------------------------
-        # Ask for human approval BEFORE modifying anything
-        # ----------------------------------------------------
+    except Exception as e:
+        return handle_tool_error(
+            "update_ticket",
+            e,
+        )
+
+
+@tool
+def update_ticket(
+    ticket_id: str,
+    status: str = "",
+    priority: str = "",
+) -> dict:
+    """Update the status and/or priority of a support ticket.
+
+    This version performs human approval through LangGraph
+    before executing the database update.
+
+    Args:
+        ticket_id: The unique ticket ID, such as TCK-1005.
+        status: New status. Allowed values: open, pending, resolved.
+        priority: New priority. Allowed values: low, medium, high.
+
+    Returns:
+        The updated ticket dictionary, or an error message.
+    """
+    valid_statuses = {
+        "open",
+        "pending",
+        "resolved",
+    }
+
+    valid_priorities = {
+        "low",
+        "medium",
+        "high",
+    }
+
+    requested_status = status.strip().lower()
+    requested_priority = priority.strip().lower()
+    requested_ticket_id = ticket_id.strip()
+
+    if (
+        requested_status
+        and requested_status not in valid_statuses
+    ):
+        return {
+            "error": (
+                f"Invalid status '{status}'. "
+                "Allowed values: open, pending, resolved."
+            )
+        }
+
+    if (
+        requested_priority
+        and requested_priority not in valid_priorities
+    ):
+        return {
+            "error": (
+                f"Invalid priority '{priority}'. "
+                "Allowed values: low, medium, high."
+            )
+        }
+
+    if not requested_status and not requested_priority:
+        return {
+            "error": "No update fields were provided."
+        }
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT ticket_id
+                    FROM tickets
+                    WHERE LOWER(ticket_id) = LOWER(%s)
+                    """,
+                    (requested_ticket_id,),
+                )
+
+                if not cur.fetchone():
+                    return {
+                        "error": (
+                            f"Ticket {ticket_id} not found."
+                        )
+                    }
 
         approval = interrupt(
             {
@@ -258,10 +350,6 @@ def update_ticket(
             }
         )
 
-        # ----------------------------------------------------
-        # Human rejected the operation
-        # ----------------------------------------------------
-
         if not approval:
             return {
                 "status": "cancelled",
@@ -271,84 +359,15 @@ def update_ticket(
                 ),
             }
 
-        # ----------------------------------------------------
-        # Build dynamic UPDATE query
-        # ----------------------------------------------------
-
-        update_fields = []
-        params = []
-
-        if requested_status:
-            update_fields.append(
-                "status = %s"
-            )
-            params.append(
-                requested_status
-            )
-
-        if requested_priority:
-            update_fields.append(
-                "priority = %s"
-            )
-            params.append(
-                requested_priority
-            )
-
-        if not update_fields:
-            return {
-                "error": (
-                    "No update fields were provided."
-                )
-            }
-
-        params.append(requested_ticket_id)
-
-        query = f"""
-            UPDATE tickets
-            SET {", ".join(update_fields)}
-            WHERE LOWER(ticket_id) = LOWER(%s)
-            RETURNING
-                ticket_id,
-                customer_id,
-                priority,
-                status,
-                subject,
-                description,
-                created_at
-        """
-
-        # ----------------------------------------------------
-        # Perform update
-        # ----------------------------------------------------
-
-        with get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    query,
-                    params,
-                )
-
-                updated_row = cur.fetchone()
-
-                columns = [
-                    description.name
-                    for description in cur.description
-                ]
-
-                if not updated_row:
-                    return {
-                        "error": (
-                            f"Ticket {ticket_id} "
-                            "could not be updated."
-                        )
-                    }
-
-                return dict(
-                    zip(columns, updated_row)
-                )
+        return _update_ticket_db(
+            ticket_id=requested_ticket_id,
+            status=requested_status,
+            priority=requested_priority,
+        )
 
     except Exception as e:
         return handle_tool_error(
             "update_ticket",
             e,
         )
+
