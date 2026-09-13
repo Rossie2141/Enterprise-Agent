@@ -4,6 +4,8 @@ from pathlib import Path
 from langchain_core.tools import tool
 from langgraph.types import interrupt
 
+from app.db.connection import get_connection
+
 
 DATA_PATH = Path(__file__).resolve().parents[2] / "data" / "sample_data" / "tickets.csv"
 
@@ -16,63 +18,92 @@ def search_tickets(
     """Search support tickets by status and/or priority.
 
     Args:
-        status: The ticket status to filter by. Valid options are 'open', 'pending',
-            'resolved', or 'unresolved' (which matches all open and pending tickets).
-            Leave empty to match all statuses.
-        priority: The ticket priority to filter by. Valid options are 'low',
-            'medium', or 'high'. Leave empty to match all priorities.
+        status: Ticket status: open, pending, resolved, or unresolved.
+        priority: Ticket priority: low, medium, or high.
 
     Returns:
-        A list of matching ticket dictionaries.
+        A list of matching tickets.
     """
 
-    results = []
+    query = """
+        SELECT
+            ticket_id,
+            customer_id,
+            priority,
+            status,
+            subject,
+            description,
+            created_at
+        FROM tickets
+        WHERE 1=1
+    """
 
-    with open(DATA_PATH, newline="", encoding="utf-8") as file:
-        reader = csv.DictReader(file)
+    params = []
 
-        for ticket in reader:
-            ticket_status = ticket.get("status", "").strip().lower()
-            ticket_priority = ticket.get("priority", "").strip().lower()
+    if status:
+        requested_status = status.strip().lower()
 
-            if status:
-                req_status = status.strip().lower()
-                if req_status == "unresolved":
-                    if ticket_status == "resolved":
-                        continue
-                elif ticket_status != req_status:
-                    continue
+        if requested_status == "unresolved":
+            query += " AND status IN (%s, %s)"
+            params.extend(["open", "pending"])
+        else:
+            query += " AND status = %s"
+            params.append(requested_status)
 
-            if priority:
-                req_priority = priority.strip().lower()
-                if ticket_priority != req_priority:
-                    continue
+    if priority:
+        query += " AND priority = %s"
+        params.append(priority.strip().lower())
 
-            results.append(ticket)
+    query += " ORDER BY ticket_id"
 
-    return results
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, params)
+
+            rows = cur.fetchall()
+
+            columns = [description.name for description in cur.description]
+
+    return [dict(zip(columns, row)) for row in rows]
 
 @tool
 def get_ticket(ticket_id: str) -> dict:
     """Retrieve a single support ticket by ticket ID.
 
     Args:
-        ticket_id: The unique ticket ID, such as 'TCK-1005'.
+        ticket_id: The unique ticket ID, such as TCK-1005.
 
     Returns:
-        The matching ticket dictionary, or an error if not found.
+        The matching ticket or an error if not found.
     """
 
-    with open(DATA_PATH, newline="", encoding="utf-8") as file:
-        reader = csv.DictReader(file)
+    query = """
+        SELECT
+            ticket_id,
+            customer_id,
+            priority,
+            status,
+            subject,
+            description,
+            created_at
+        FROM tickets
+        WHERE LOWER(ticket_id) = LOWER(%s)
+    """
 
-        for ticket in reader:
-            if ticket.get("ticket_id", "").strip().lower() == ticket_id.strip().lower():
-                return ticket
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, (ticket_id.strip(),))
 
-    return {
-        "error": f"Ticket {ticket_id} not found."
-    }
+            row = cur.fetchone()
+
+            if not row:
+                return {
+                    "error": f"Ticket {ticket_id} not found."
+                }
+
+            columns = [description.name for description in cur.description]
+
+    return dict(zip(columns, row))
 
 @tool
 def update_ticket(
@@ -83,7 +114,7 @@ def update_ticket(
     """Update the status and/or priority of a support ticket.
 
     Args:
-        ticket_id: The unique ticket ID, such as 'TCK-1005'.
+        ticket_id: The unique ticket ID, such as TCK-1005.
         status: New status. Allowed values: open, pending, resolved.
         priority: New priority. Allowed values: low, medium, high.
 
@@ -96,7 +127,7 @@ def update_ticket(
 
     requested_status = status.strip().lower()
     requested_priority = priority.strip().lower()
-    requested_ticket_id = ticket_id.strip().lower()
+    requested_ticket_id = ticket_id.strip()
 
     # Validate status
     if requested_status and requested_status not in valid_statuses:
@@ -116,6 +147,30 @@ def update_ticket(
             )
         }
 
+    # Verify ticket exists BEFORE asking for approval
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT ticket_id, customer_id, priority, status,
+                       subject, description, created_at
+                FROM tickets
+                WHERE LOWER(ticket_id) = LOWER(%s)
+                """,
+                (requested_ticket_id,),
+            )
+
+            existing_ticket = cur.fetchone()
+
+            if not existing_ticket:
+                return {
+                    "error": f"Ticket {ticket_id} not found."
+                }
+
+            columns = [description.name for description in cur.description]
+
+    existing_ticket = dict(zip(columns, existing_ticket))
+
     # Ask for human approval BEFORE modifying anything
     approval = interrupt(
         {
@@ -123,9 +178,7 @@ def update_ticket(
             "ticket_id": ticket_id,
             "new_status": requested_status or None,
             "new_priority": requested_priority or None,
-            "message": (
-                f"Approve updating ticket {ticket_id}?"
-            ),
+            "message": f"Approve updating ticket {ticket_id}?",
         }
     )
 
@@ -133,51 +186,49 @@ def update_ticket(
     if not approval:
         return {
             "status": "cancelled",
-            "message": f"Update to ticket {ticket_id} was cancelled."
+            "message": f"Update to ticket {ticket_id} was cancelled.",
         }
 
-    # Read all tickets
-    with open(DATA_PATH, newline="", encoding="utf-8") as file:
-        reader = csv.DictReader(file)
-        tickets = list(reader)
+    # Build dynamic UPDATE query
+    update_fields = []
+    params = []
 
-    # Find and update ticket
-    ticket_found = False
-    updated_ticket = None
+    if requested_status:
+        update_fields.append("status = %s")
+        params.append(requested_status)
 
-    for ticket in tickets:
-        if ticket.get("ticket_id", "").strip().lower() == requested_ticket_id:
-            ticket_found = True
+    if requested_priority:
+        update_fields.append("priority = %s")
+        params.append(requested_priority)
 
-            if requested_status:
-                ticket["status"] = requested_status
-
-            if requested_priority:
-                ticket["priority"] = requested_priority
-
-            updated_ticket = ticket
-            break
-
-    if not ticket_found:
+    if not update_fields:
         return {
-            "error": f"Ticket {ticket_id} not found."
+            "error": "No update fields were provided."
         }
 
-    # Write updated data back to CSV
-    fieldnames = [
-        "ticket_id",
-        "customer_id",
-        "priority",
-        "status",
-        "subject",
-        "description",
-        "created_at",
-    ]
+    params.append(requested_ticket_id)
 
-    with open(DATA_PATH, "w", newline="", encoding="utf-8") as file:
-        writer = csv.DictWriter(file, fieldnames=fieldnames)
+    query = f"""
+        UPDATE tickets
+        SET {", ".join(update_fields)}
+        WHERE LOWER(ticket_id) = LOWER(%s)
+        RETURNING
+            ticket_id,
+            customer_id,
+            priority,
+            status,
+            subject,
+            description,
+            created_at
+    """
 
-        writer.writeheader()
-        writer.writerows(tickets)
+    # Perform update
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, params)
 
-    return updated_ticket
+            updated_row = cur.fetchone()
+
+            columns = [description.name for description in cur.description]
+
+    return dict(zip(columns, updated_row))
