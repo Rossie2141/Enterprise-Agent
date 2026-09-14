@@ -1,12 +1,16 @@
 import logging
 import sys
 
+from app.utils.request_context import get_request_id
+
+
+class RequestIdFilter(logging.Filter):
+    def filter(self, record):
+        record.request_id = get_request_id()
+        return True
+
 
 def setup_logger() -> logging.Logger:
-    """
-    Configure application-wide logging.
-    """
-
     logger = logging.getLogger("enterprise_agent")
 
     if logger.handlers:
@@ -16,8 +20,12 @@ def setup_logger() -> logging.Logger:
 
     handler = logging.StreamHandler(sys.stdout)
 
+    handler.addFilter(RequestIdFilter())
+
     formatter = logging.Formatter(
-        "%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+        "%(asctime)s | %(levelname)s | "
+        "request_id=%(request_id)s | "
+        "%(name)s | %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 

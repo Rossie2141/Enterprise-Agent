@@ -1,3 +1,11 @@
+import os
+
+from dotenv import load_dotenv
+from psycopg import Connection
+from app.utils.logger import logger
+
+load_dotenv()
+
 from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import ToolNode
 from langchain_core.messages import SystemMessage
@@ -6,7 +14,7 @@ from app.utils.logger import logger
 from app.agents.state import AgentState
 from app.agents.router import route_request
 from app.models.llm import get_llm
-from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.postgres import PostgresSaver
 
 from app.tools.ticket_tools import (
     search_tickets,
@@ -246,6 +254,16 @@ def select_tool_node(state: AgentState):
 
     return END
 
+def get_checkpoint_connection():
+    return Connection.connect(
+        host=os.getenv("DB_HOST", "localhost"),
+        port=int(os.getenv("DB_PORT", "5433")),
+        dbname=os.getenv("DB_NAME", "enterprise_agent"),
+        user=os.getenv("DB_USER", "agent_user"),
+        password=os.getenv("DB_PASSWORD", "agent_password"),
+        autocommit=True,
+    )
+
 
 def build_graph():
     """
@@ -364,11 +382,15 @@ def build_graph():
     )
 
     # Memory
-    checkpointer = InMemorySaver()
+    checkpointer = PostgresSaver(
+    get_checkpoint_connection()
+)
 
-    return graph.compile(
-        checkpointer=checkpointer
-    )
+    checkpointer.setup()
+
+    logger.info("PostgreSQL checkpointer initialized")
+
+    return graph.compile(checkpointer=checkpointer)
 
 
 agent = build_graph()
