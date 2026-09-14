@@ -15,8 +15,6 @@ dependencies = [
     "psycopg[binary]",
     "slowapi",
     "mcp",
-    "sentence-transformers",
-    "numpy"
 ]
 
 [tool.vercel]
