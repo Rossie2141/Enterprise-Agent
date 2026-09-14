@@ -2,6 +2,22 @@
 name = "enterprise-ai-agent"
 version = "0.1.0"
 requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "python-dotenv",
+    "pydantic",
+    "langchain",
+    "langchain-core",
+    "langchain-groq",
+    "langgraph",
+    "langgraph-checkpoint-postgres",
+    "psycopg[binary]",
+    "slowapi",
+    "mcp",
+    "sentence-transformers",
+    "numpy"
+]
 
 [tool.vercel]
 entrypoint = "app.api.main:app"
